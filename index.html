@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Market Monitor — Bloomberg Style</title>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;
+      color: #00ff00;
+      font-family: 'Courier New', Courier, monospace;
+      padding: 20px 28px 40px;
+      min-height: 100vh;
+    }
+
+    h1 {
+      color: #ff9900;
+      text-align: center;
+      font-size: 2em;
+      letter-spacing: 4px;
+      border-bottom: 2px solid #ff9900;
+      padding-bottom: 12px;
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      color: #ff9900;
+      font-size: 1.15em;
+      margin: 28px 0 14px;
+      letter-spacing: 1px;
+    }
+
+    /* ---- Status bar ---- */
+    #status {
+      text-align: right;
+      color: #555;
+      font-size: 0.78em;
+      margin-bottom: 18px;
+    }
+
+    /* ---- Controls ---- */
+    .controls {
+      display: flex;
+      gap: 30px;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      margin-bottom: 22px;
+    }
+    .control-group > label {
+      display: block;
+      color: #ff9900;
+      font-size: 0.82em;
+      margin-bottom: 7px;
+      letter-spacing: 1px;
+    }
+    select {
+      background: #1a1a1a;
+      color: #00ff00;
+      border: 1px solid #444;
+      padding: 7px 14px;
+      font-family: inherit;
+      font-size: 0.9em;
+      cursor: pointer;
+      border-radius: 3px;
+    }
+    select:focus { outline: 1px solid #ff9900; }
+    .assets-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .asset-btn {
+      background: #1a1a1a;
+      color: #00ff00;
+      border: 1px solid #444;
+      padding: 6px 12px;
+      font-family: inherit;
+      font-size: 0.82em;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .asset-btn:hover  { border-color: #ff9900; }
+    .asset-btn.active { background: #222; border-color: #ff9900; color: #ff9900; font-weight: bold; }
+
+    /* ---- Metric cards ---- */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 14px;
+      margin-bottom: 8px;
+    }
+    .metric-card {
+      background: #111;
+      border: 1px solid #2a2a2a;
+      border-radius: 4px;
+      padding: 14px 12px;
+      text-align: center;
+    }
+    .metric-label { color: #ff9900; font-size: 0.78em; font-weight: bold; letter-spacing: 1px; margin-bottom: 8px; }
+    .metric-value { font-size: 1.35em; font-weight: bold; color: #00ff00; }
+    .metric-delta { font-size: 0.85em; margin-top: 6px; min-height: 1.2em; }
+    .positive { color: #00ff00; }
+    .negative { color: #ff4444; }
+    .muted    { color: #555; font-style: italic; }
+
+    /* ---- Chart ---- */
+    #chart {
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+
+    /* ---- News ---- */
+    #news-container { margin-bottom: 10px; }
+    .news-item {
+      border-bottom: 1px solid #1c1c1c;
+      padding: 11px 0;
+      line-height: 1.6;
+    }
+    .news-title {
+      color: #00ff00;
+      font-weight: bold;
+      font-size: 0.92em;
+    }
+    .news-title::before { content: '▶ '; color: #ff9900; }
+    .news-meta { color: #555; font-size: 0.78em; margin-top: 3px; }
+
+    /* ---- Footer ---- */
+    footer {
+      text-align: center;
+      color: #333;
+      font-size: 0.8em;
+      margin-top: 32px;
+      padding-top: 14px;
+      border-top: 1px solid #1a1a1a;
+    }
+  </style>
+</head>
+<body>
+
+<h1>◆ GLOBAL MARKET WATCH ◆</h1>
+<div id="status">Initialisation…</div>
+
+<div class="controls">
+  <div class="control-group">
+    <label>PÉRIODE</label>
+    <select id="period-select">
+      <option value="6mo">6 Mois</option>
+      <option value="1y">1 An</option>
+      <option value="5y">5 Ans</option>
+      <option value="10y">10 Ans</option>
+    </select>
+  </div>
+  <div class="control-group">
+    <label>ACTIFS</label>
+    <div class="assets-grid" id="assets-buttons"></div>
+  </div>
+</div>
+
+<h2>📊 Prix en Temps Réel</h2>
+<div class="metrics-grid" id="metrics-grid"></div>
+
+<h2>📈 Performance Relative (Base 100)</h2>
+<div id="chart"></div>
+
+<h2>📰 News Feed</h2>
+<div id="news-container"><p class="muted">Chargement des news…</p></div>
+
+<footer>Market Monitor Professional &bull; Données Yahoo Finance &bull; Actualisation auto toutes les 5 min</footer>
+
+<script>
+'use strict';
+
+// ------------------------------------------------------------------ config
+const ASSETS = {
+  'S&P 500':    '^GSPC',
+  'BTC/USD':    'BTC-USD',
+  'GOLD':       'GC=F',
+  'SILVER':     'SI=F',
+  'MICROSTRAT': 'MSTR',
+  'TESLA':      'TSLA',
+  'GOLD PROD':  'GDX'
+};
+
+const NEWS_FEEDS = [
+  'https://feeds.reuters.com/reuters/businessNews',
+  'https://www.cnbc.com/id/100003114/device/rss/rss.html',
+  'https://feeds.feedburner.com/zerohedge/feed'
+];
+
+const YF_BASE      = 'https://query1.finance.yahoo.com/v8/finance/chart/';
+const RSS2JSON_API = 'https://api.rss2json.com/v1/api.json?count=5&rss_url=';
+
+// ------------------------------------------------------------------ state
+let selectedAssets = new Set(['S&P 500', 'BTC/USD']);
+let currentPeriod  = '6mo';
+let historyCache   = {};
+
+// ------------------------------------------------------------------ bootstrap
+function init() {
+  renderAssetButtons();
+  document.getElementById('period-select').addEventListener('change', e => {
+    currentPeriod = e.target.value;
+    historyCache  = {};
+    loadMarketData();
+  });
+  loadMarketData();
+  loadNews();
+  setInterval(() => { historyCache = {}; loadMarketData(); }, 5 * 60 * 1000);
+}
+
+// ------------------------------------------------------------------ UI helpers
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function fmt(n) {
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ------------------------------------------------------------------ asset buttons
+function renderAssetButtons() {
+  const container = document.getElementById('assets-buttons');
+  container.innerHTML = '';
+  for (const name of Object.keys(ASSETS)) {
+    const btn = document.createElement('button');
+    btn.className = 'asset-btn' + (selectedAssets.has(name) ? ' active' : '');
+    btn.textContent = name;
+    btn.addEventListener('click', () => toggleAsset(name, btn));
+    container.appendChild(btn);
+  }
+}
+
+function toggleAsset(name, btn) {
+  if (selectedAssets.has(name)) {
+    if (selectedAssets.size <= 1) return;
+    selectedAssets.delete(name);
+    btn.classList.remove('active');
+  } else {
+    selectedAssets.add(name);
+    btn.classList.add('active');
+  }
+  loadMarketData();
+}
+
+// ------------------------------------------------------------------ Yahoo Finance fetch
+async function fetchYF(ticker, range) {
+  const url = `${YF_BASE}${encodeURIComponent(ticker)}?interval=1d&range=${range}`;
+  const res  = await fetch(url);
+  if (!res.ok) throw new Error(`YF HTTP ${res.status}`);
+  return res.json();
+}
+
+async function getCurrentPrice(ticker) {
+  try {
+    const json   = await fetchYF(ticker, '5d');
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+    const closes = result.indicators?.quote?.[0]?.close ?? [];
+    // last non-null value
+    return [...closes].reverse().find(v => v != null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function getHistoricalData(ticker, range) {
+  const key = `${ticker}__${range}`;
+  if (historyCache[key]) return historyCache[key];
+  try {
+    const json   = await fetchYF(ticker, range);
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+    const ts     = result.timestamp ?? [];
+    const closes = result.indicators?.quote?.[0]?.close ?? [];
+    const pairs  = ts
+      .map((t, i) => ({ date: new Date(t * 1000), close: closes[i] }))
+      .filter(p => p.close != null);
+    if (pairs.length < 2) return null;
+    historyCache[key] = pairs;
+    return pairs;
+  } catch {
+    return null;
+  }
+}
+
+// ------------------------------------------------------------------ metrics
+function renderMetricPlaceholders() {
+  const grid = document.getElementById('metrics-grid');
+  grid.innerHTML = '';
+  for (const name of selectedAssets) {
+    const id  = `mc-${name.replace(/[^a-z0-9]/gi, '_')}`;
+    const div = document.createElement('div');
+    div.className = 'metric-card';
+    div.id = id;
+    div.innerHTML = `
+      <div class="metric-label">${escHtml(name)}</div>
+      <div class="metric-value muted">…</div>
+      <div class="metric-delta"></div>`;
+    grid.appendChild(div);
+  }
+}
+
+async function updateMetric(name, ticker) {
+  const id   = `mc-${name.replace(/[^a-z0-9]/gi, '_')}`;
+  const card = document.getElementById(id);
+  if (!card) return;
+
+  const [price, hist] = await Promise.all([
+    getCurrentPrice(ticker),
+    getHistoricalData(ticker, currentPeriod)
+  ]);
+
+  const valEl   = card.querySelector('.metric-value');
+  const deltaEl = card.querySelector('.metric-delta');
+
+  if (price == null) {
+    valEl.textContent = 'N/A';
+    valEl.className   = 'metric-value muted';
+    return;
+  }
+
+  valEl.textContent = `$${fmt(price)}`;
+  valEl.className   = 'metric-value';
+
+  if (hist && hist.length > 1) {
+    const start  = hist[0].close;
+    const change = price - start;
+    const pct    = (change / start) * 100;
+    const sign   = change >= 0 ? '+' : '';
+    const cls    = change >= 0 ? 'positive' : 'negative';
+    deltaEl.innerHTML = `<span class="${cls}">${sign}${fmt(change)} (${sign}${pct.toFixed(2)}%)</span>`;
+  }
+}
+
+// ------------------------------------------------------------------ chart
+async function renderChart() {
+  const traces = [];
+  for (const name of selectedAssets) {
+    const hist = await getHistoricalData(ASSETS[name], currentPeriod);
+    if (!hist || hist.length < 2) continue;
+    const base = hist[0].close;
+    traces.push({
+      x:    hist.map(p => p.date),
+      y:    hist.map(p => (p.close / base) * 100),
+      name,
+      mode: 'lines',
+      line: { width: 2 }
+    });
+  }
+
+  Plotly.react('chart', traces, {
+    template:      'plotly_dark',
+    paper_bgcolor: '#0a0a0a',
+    plot_bgcolor:  '#0a0a0a',
+    height:        480,
+    xaxis:  { title: 'Date',              gridcolor: '#1e1e1e', color: '#00ff00' },
+    yaxis:  { title: 'Performance (%)',   gridcolor: '#1e1e1e', color: '#00ff00' },
+    legend: { bgcolor: '#111', bordercolor: '#333', font: { color: '#00ff00' } },
+    hovermode: 'x unified',
+    margin: { t: 20, b: 55, l: 65, r: 20 }
+  }, { responsive: true, displaylogo: false });
+}
+
+// ------------------------------------------------------------------ orchestrate
+async function loadMarketData() {
+  setStatus('Chargement des données marché…');
+  renderMetricPlaceholders();
+  await Promise.all([...selectedAssets].map(n => updateMetric(n, ASSETS[n])));
+  await renderChart();
+  setStatus(`Dernière mise à jour : ${new Date().toLocaleTimeString('fr-FR')}`);
+}
+
+// ------------------------------------------------------------------ news
+async function loadNews() {
+  const container = document.getElementById('news-container');
+  const all = [];
+
+  for (const feedUrl of NEWS_FEEDS) {
+    try {
+      const res  = await fetch(RSS2JSON_API + encodeURIComponent(feedUrl));
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.status !== 'ok' || !Array.isArray(data.items)) continue;
+      for (const item of data.items.slice(0, 3)) {
+        all.push({
+          title:     item.title   || 'Sans titre',
+          source:    data.feed?.title || 'Inconnu',
+          published: item.pubDate || ''
+        });
+      }
+    } catch {
+      // feed inaccessible, on continue
+    }
+  }
+
+  if (all.length === 0) {
+    container.innerHTML = '<p class="muted">Aucune news disponible.</p>';
+    return;
+  }
+
+  container.innerHTML = all.slice(0, 10).map(n => `
+    <div class="news-item">
+      <div class="news-title">${escHtml(n.title)}</div>
+      <div class="news-meta">[${escHtml(n.source)}] &mdash; ${escHtml(n.published.substring(0, 25) || 'N/A')}</div>
+    </div>
+  `).join('');
+}
+
+// ------------------------------------------------------------------ start
+init();
+</script>
+</body>
+</html>
