@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import feedparser
 import requests
-import logging
+import html
 
 # Configuration de la page
 st.set_page_config(
@@ -93,19 +93,19 @@ prices = {}
 for i, asset_name in enumerate(selected_assets):
     ticker = ASSETS[asset_name]
     price = get_current_price(ticker)
-    
-    if price:
+
+    if price is not None:
         prices[asset_name] = price
-        
+
         # Calcul de la variation
         days = period_days[selected_period]
         hist_data = get_historical_data(ticker, days)
-        
-        if hist_data is not None and len(hist_data) > 0:
+
+        if hist_data is not None and len(hist_data) > 1:
             start_price = hist_data.iloc[0]
             change = price - start_price
             pct_change = (change / start_price) * 100
-            
+
             with cols[i % len(cols)]:
                 st.metric(
                     label=asset_name,
@@ -116,17 +116,17 @@ for i, asset_name in enumerate(selected_assets):
 # Graphique
 if selected_assets:
     st.subheader("📈 Performance Relative (Base 100)")
-    
+
     fig = go.Figure()
-    
+
     for asset_name in selected_assets:
         ticker = ASSETS[asset_name]
         hist_data = get_historical_data(ticker, period_days[selected_period])
-        
-        if hist_data is not None:
+
+        if hist_data is not None and len(hist_data) > 1:
             # Normalisation base 100
             normalized = (hist_data / hist_data.iloc[0]) * 100
-            
+
             fig.add_trace(go.Scatter(
                 x=normalized.index,
                 y=normalized.values,
@@ -134,7 +134,7 @@ if selected_assets:
                 mode='lines',
                 line=dict(width=2)
             ))
-    
+
     fig.update_layout(
         template='plotly_dark',
         height=500,
@@ -142,7 +142,7 @@ if selected_assets:
         yaxis_title="Performance (%)",
         hovermode='x unified'
     )
-    
+
     st.plotly_chart(fig, use_container_width=True)
 
 # News Feed
@@ -150,7 +150,7 @@ st.subheader("📰 News Feed")
 
 NEWS_FEEDS = [
     "https://feeds.feedburner.com/zerohedge/feed",
-    "https://www.reuters.com/rssfeed/business",
+    "https://feeds.reuters.com/reuters/businessNews",
     "https://www.cnbc.com/id/100003114/device/rss/rss.html",
 ]
 
@@ -160,22 +160,25 @@ for feed_url in NEWS_FEEDS:
         response = requests.get(feed_url, timeout=10, headers={
             'User-Agent': 'Mozilla/5.0'
         })
+        response.raise_for_status()
         feed = feedparser.parse(response.content)
-        
+
         for entry in feed.entries[:3]:
             all_news.append({
-                'title': entry.get('title', 'No title'),
-                'source': feed.feed.get('title', 'Unknown') if hasattr(feed, 'feed') else 'Unknown',
+                'title': html.escape(entry.get('title', 'No title')),
+                'source': html.escape(
+                    feed.feed.get('title', 'Unknown') if hasattr(feed, 'feed') else 'Unknown'
+                ),
                 'published': entry.get('published', '')
             })
-    except:
+    except Exception:
         continue
 
 if all_news:
     for news in all_news[:10]:
         st.markdown(f"""
-        **▶ {news['title']}**  
-        *[{news['source']}]* - {news['published'][:50] if news['published'] else 'N/A'}  
+        **▶ {news['title']}**
+        *[{news['source']}]* - {news['published'][:50] if news['published'] else 'N/A'}
         ---
         """)
 else:
